@@ -37,6 +37,10 @@ $(if $(filter true,$(BUILD_BROKEN_VINTF_PRODUCT_COPY_FILES)),, \
                 $(TARGET_COPY_OUT_ODM)/etc/manifest%,$(2)), \
     $(error VINTF metadata found in PRODUCT_COPY_FILES: $(1), \
       use ODM_MANIFEST_FILES / vintf_fragments instead!)) \
+  $(if $(filter $(TARGET_COPY_OUT_OEM)/etc/vintf/% \
+                $(TARGET_COPY_OUT_OEM)/etc/manifest%,$(2)), \
+    $(error VINTF metadata found in PRODUCT_COPY_FILES: $(1), \
+      use OEM_MANIFEST_FILES / vintf_fragments instead!)) \
 )
 endef
 # filter out the duplicate <source file>:<dest file> pairs.
@@ -651,6 +655,47 @@ $(INSTALLED_ODM_BUILD_PROP_TARGET): $(BUILDINFO_COMMON_SH) $(POST_PROCESS_PROPS)
 	    echo "$(line)" >> $@;)
 	$(hide) $(POST_PROCESS_PROPS) $@
 
+# ----------------------------------------------------------------
+# oem build.prop
+INSTALLED_OEM_BUILD_PROP_TARGET := $(TARGET_OUT_OEM)/etc/build.prop
+ALL_DEFAULT_INSTALLED_MODULES += $(INSTALLED_OEM_BUILD_PROP_TARGET)
+
+ifdef TARGET_ODM_PROP
+oem_prop_files := $(TARGET_OEM_PROP)
+else
+oem_prop_files := $(wildcard $(TARGET_DEVICE_DIR)/oem.prop)
+endif
+
+FINAL_OEM_BUILD_PROPERTIES += \
+    $(call collapse-pairs, $(PRODUCT_OEM_PROPERTIES))
+FINAL_OEM_BUILD_PROPERTIES := $(call uniq-pairs-by-first-component, \
+    $(FINAL_OEM_BUILD_PROPERTIES),=)
+
+$(INSTALLED_OEM_BUILD_PROP_TARGET): $(BUILDINFO_COMMON_SH) $(POST_PROCESS_PROPS) $(oem_prop_files)
+	@echo Target oem buildinfo: $@
+	@mkdir -p $(dir $@)
+	$(hide) echo > $@
+	$(hide) echo ro.oem.product.cpu.abilist="$(TARGET_CPU_ABI_LIST)">>$@
+	$(hide) echo ro.oem.product.cpu.abilist32="$(TARGET_CPU_ABI_LIST_32_BIT)">>$@
+	$(hide) echo ro.oem.product.cpu.abilist64="$(TARGET_CPU_ABI_LIST_64_BIT)">>$@
+	$(hide) $(call generate-common-build-props,oem,$@)
+	$(hide) $(foreach file,$(oem_prop_files), \
+	    if [ -f "$(file)" ]; then \
+	        echo Target oem properties from: "$(file)"; \
+	        echo "" >> $@; \
+	        echo "#" >> $@; \
+	        echo "# from $(file)" >> $@; \
+	        echo "#" >> $@; \
+	        cat $(file) >> $@; \
+	        echo "# end of $(file)" >> $@; \
+	    fi;)
+	$(hide) echo "#" >> $@; \
+	        echo "# ADDITIONAL OEM BUILD PROPERTIES" >> $@; \
+	        echo "#" >> $@;
+	$(hide) $(foreach line,$(FINAL_OEM_BUILD_PROPERTIES), \
+	    echo "$(line)" >> $@;)
+	$(hide) $(POST_PROCESS_PROPS) $@
+
 # -----------------------------------------------------------------
 # system_ext build.prop
 INSTALLED_SYSTEM_EXT_BUILD_PROP_TARGET := $(TARGET_OUT_SYSTEM_EXT)/build.prop
@@ -895,6 +940,7 @@ $(foreach dir,$(BOARD_KERNEL_MODULE_DIRS), \
   $(eval ALL_DEFAULT_INSTALLED_MODULES += $(call build-vendor-ramdisk-recovery-load,$(dir))) \
   $(eval ALL_DEFAULT_INSTALLED_MODULES += $(call build-image-kernel-modules-dir,VENDOR,$(TARGET_OUT_VENDOR),vendor,modules.load,$(VENDOR_STRIPPED_MODULE_STAGING_DIR),$(dir))) \
   $(eval ALL_DEFAULT_INSTALLED_MODULES += $(call build-image-kernel-modules-dir,ODM,$(TARGET_OUT_ODM),odm,modules.load,,$(dir))) \
+  $(eval ALL_DEFAULT_INSTALLED_MODULES += $(call build-image-kernel-modules-dir,OEM,$(TARGET_OUT_OEM),oem,modules.load,,$(dir))) \
   $(if $(filter true,$(BOARD_USES_RECOVERY_AS_BOOT)),\
     $(eval ALL_DEFAULT_INSTALLED_MODULES += $(call build-recovery-as-boot-load,$(dir))),\
     $(eval ALL_DEFAULT_INSTALLED_MODULES += $(call build-image-kernel-modules-dir,GENERIC_RAMDISK,$(TARGET_RAMDISK_OUT),,modules.load,,$(dir)))))
@@ -1417,7 +1463,7 @@ endif # BUILDING_VENDOR_BOOT_IMAGE
 .PHONY: notice_files
 
 # Create the rule to combine the files into text and html/xml forms
-# $(1) - xml_excluded_system_product_odm|xml_excluded_vendor_product_odm
+# $(1) - xml_excluded_system_product_odm|xml_excluded_vendor_product_odm 
 #        xml_product|xml_odm|xml_system_ext|xml_system|html
 # $(2) - Plain text output file
 # $(3) - HTML/XML output file
@@ -1443,13 +1489,14 @@ $(2) $(3): PRIVATE_DIR := $(5)
 $(2) : $(3)
 $(3) : $(6) $(BUILD_SYSTEM)/Makefile build/make/tools/generate-notice-files.py
 	build/make/tools/generate-notice-files.py --text-output $(2) \
-	    $(if $(filter $(1),xml_excluded_vendor_product_odm),-e vendor -e product -e system_ext -e odm --xml-output, \
-	      $(if $(filter $(1),xml_excluded_system_product_odm),-e system -e product -e system_ext -e odm --xml-output, \
+	    $(if $(filter $(1),xml_excluded_vendor_product_odm),-e vendor -e product -e system_ext -e odm -e oem --xml-output, \
+	      $(if $(filter $(1),xml_excluded_system_product_odm),-e system -e product -e system_ext -e odm -e oem --xml-output, \
 	        $(if $(filter $(1),xml_product),-i product --xml-output, \
 	          $(if $(filter $(1),xml_system_ext),-i system_ext --xml-output, \
 	            $(if $(filter $(1),xml_system),-i system --xml-output, \
 	              $(if $(filter $(1),xml_odm),-i odm --xml-output, \
-	                --html-output)))))) $(3) \
+	                $(if $(filter $(1),xml_oem),-i oem --xml-output, \
+	                  --html-output))))))) $(3) \
 	    -t $$(PRIVATE_MESSAGE) $$(foreach dir,$$(sort $$(PRIVATE_DIR)), -s $$(dir)/src)
 notice_files: $(2) $(3)
 endef
@@ -1507,6 +1554,11 @@ target_odm_notice_file_xml := $(TARGET_OUT_INTERMEDIATES)/NOTICE_ODM.xml
 target_odm_notice_file_xml_gz := $(TARGET_OUT_INTERMEDIATES)/NOTICE_ODM.xml.gz
 installed_odm_notice_xml_gz := $(TARGET_OUT_ODM)/etc/NOTICE.xml.gz
 
+target_oem_notice_file_txt := $(TARGET_OUT_INTERMEDIATES)/NOTICE_OEM.txt
+target_oem_notice_file_xml := $(TARGET_OUT_INTERMEDIATES)/NOTICE_OEM.xml
+target_oem_notice_file_xml_gz := $(TARGET_OUT_INTERMEDIATES)/NOTICE_OEM.xml.gz
+installed_oem_notice_xml_gz := $(TARGET_OUT_OEM)/etc/NOTICE.xml.gz
+
 # Notice files are copied to TARGET_OUT_NOTICE_FILES as a side-effect of their module
 # being built. A notice xml file must depend on all modules that could potentially
 # install a license file relevant to it.
@@ -1522,11 +1574,13 @@ license_modules_vendor := $(filter $(TARGET_OUT_VENDOR)/%,$(license_modules))
 license_modules_product := $(filter $(TARGET_OUT_PRODUCT)/%,$(license_modules))
 license_modules_system_ext := $(filter $(TARGET_OUT_SYSTEM_EXT)/%,$(license_modules))
 license_modules_odm := $(filter $(TARGET_OUT_ODM)/%,$(license_modules))
+license_modules_oem := $(filter $(TARGET_OUT_OEM)/%,$(license_modules))
 license_modules_agg := $(license_modules_system) \
                        $(license_modules_vendor) \
                        $(license_modules_product) \
                        $(license_modules_system_ext) \
-                       $(license_modules_odm)
+                       $(license_modules_odm) \
+                       $(license_modules_oem)
 license_modules_rest := $(filter-out $(license_modules_agg),$(license_modules))
 
 # If we are building in a configuration that includes a prebuilt vendor.img, we can't
@@ -1534,7 +1588,7 @@ license_modules_rest := $(filter-out $(license_modules_agg),$(license_modules))
 ifdef BOARD_PREBUILT_VENDORIMAGE
 license_modules_system += $(license_modules_rest)
 system_xml_directories := xml_excluded_vendor_product_odm
-system_notice_file_message := "Notices for files contained in all filesystem images except vendor/system_ext/product/odm in this directory:"
+system_notice_file_message := "Notices for files contained in all filesystem images except vendor/system_ext/product/odm/oem in this directory:"
 else
 license_modules_vendor += $(license_modules_rest)
 system_xml_directories := xml_system
@@ -1571,6 +1625,12 @@ $(eval $(call combine-notice-files, xml_odm, \
 	        "Notices for files contained in the odm filesystem image in this directory:", \
 	        $(TARGET_OUT_NOTICE_FILES), \
 	        $(license_modules_odm)))
+$(eval $(call combine-notice-files, xml_oem, \
+	        $(target_oem_notice_file_txt), \
+	        $(target_oem_notice_file_xml), \
+	        "Notices for files contained in the oem filesystem image in this directory:", \
+	        $(TARGET_OUT_NOTICE_FILES), \
+	        $(license_modules_oem)))
 
 $(target_notice_file_xml_gz): $(target_notice_file_xml) | $(MINIGZIP)
 	$(hide) $(MINIGZIP) -9 < $< > $@
@@ -1582,6 +1642,8 @@ $(target_system_ext_notice_file_xml_gz): $(target_system_ext_notice_file_xml) | 
 	$(hide) $(MINIGZIP) -9 < $< > $@
 $(target_odm_notice_file_xml_gz): $(target_odm_notice_file_xml) | $(MINIGZIP)
 	$(hide) $(MINIGZIP) -9 < $< > $@
+$(target_oem_notice_file_xml_gz): $(target_oem_notice_file_xml) | $(MINIGZIP)
+	$(hide) $(MINIGZIP) -9 < $< > $@
 $(installed_notice_html_or_xml_gz): $(target_notice_file_xml_gz)
 	$(copy-file-to-target)
 $(installed_vendor_notice_xml_gz): $(target_vendor_notice_file_xml_gz)
@@ -1592,12 +1654,15 @@ $(installed_system_ext_notice_xml_gz): $(target_system_ext_notice_file_xml_gz)
 	$(copy-file-to-target)
 $(installed_odm_notice_xml_gz): $(target_odm_notice_file_xml_gz)
 	$(copy-file-to-target)
+$(installed_oem_notice_xml_gz): $(target_oem_notice_file_xml_gz)
+	$(copy-file-to-target)
 
 ALL_DEFAULT_INSTALLED_MODULES += $(installed_notice_html_or_xml_gz)
 ALL_DEFAULT_INSTALLED_MODULES += $(installed_vendor_notice_xml_gz)
 ALL_DEFAULT_INSTALLED_MODULES += $(installed_product_notice_xml_gz)
 ALL_DEFAULT_INSTALLED_MODULES += $(installed_system_ext_notice_xml_gz)
 ALL_DEFAULT_INSTALLED_MODULES += $(installed_odm_notice_xml_gz)
+ALL_DEFAULT_INSTALLED_MODULES += $(installed_oem_notice_xml_gz)
 endif # PRODUCT_NOTICE_SPLIT
 
 ALL_DEFAULT_INSTALLED_MODULES += $(installed_notice_html_or_xml_gz)
@@ -1663,7 +1728,7 @@ ifeq ($(TARGET_USERIMAGES_USE_F2FS),true)
 INTERNAL_USERIMAGES_DEPS += $(MKF2FSUSERIMG)
 endif
 
-ifneq ($(filter $(BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE) $(BOARD_SYSTEM_EXTIMAGE_FILE_SYSTEM_TYPE) $(BOARD_ODMIMAGE_FILE_SYSTEM_TYPE) $(BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE) $(BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE),squashfs),)
+ifneq ($(filter $(BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE) $(BOARD_SYSTEM_EXTIMAGE_FILE_SYSTEM_TYPE) $(BOARD_ODMIMAGE_FILE_SYSTEM_TYPE)  $(BOARD_OEMIMAGE_FILE_SYSTEM_TYPE) $(BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE) $(BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE),squashfs),)
 INTERNAL_USERIMAGES_DEPS += $(MKSQUASHFSUSERIMG)
 endif
 
@@ -1780,11 +1845,18 @@ $(if $(filter $(2),odm),\
     $(hide) echo "odm_selinux_fc=$(SELINUX_FC)" >> $(1)
 )
 $(if $(filter $(2),oem),\
-    $(if $(BOARD_OEMIMAGE_PARTITION_SIZE),$(hide) echo "oem_size=$(BOARD_OEMIMAGE_PARTITION_SIZE)" >> $(1))
-    $(if $(BOARD_OEMIMAGE_JOURNAL_SIZE),$(hide) echo "oem_journal_size=$(BOARD_OEMIMAGE_JOURNAL_SIZE)" >> $(1))
+    $(if $(BOARD_OEMIMAGE_FILE_SYSTEM_TYPE),$(hide) echo "oem_fs_type=$(BOARD_OEMIMAGE_FILE_SYSTEM_TYPE)" >> $(1))
     $(if $(BOARD_OEMIMAGE_EXTFS_INODE_COUNT),$(hide) echo "oem_extfs_inode_count=$(BOARD_OEMIMAGE_EXTFS_INODE_COUNT)" >> $(1))
     $(if $(BOARD_OEMIMAGE_EXTFS_RSV_PCT),$(hide) echo "oem_extfs_rsv_pct=$(BOARD_OEMIMAGE_EXTFS_RSV_PCT)" >> $(1))
-    $(hide) echo "oem_selinux_fc=$(SELINUX_FC)" >> $(1)
+    $(if $(BOARD_OEMIMAGE_PARTITION_SIZE),$(hide) echo "oem_size=$(BOARD_OEMIMAGE_PARTITION_SIZE)" >> $(1))
+    $(if $(BOARD_OEMIMAGE_JOURNAL_SIZE),$(hide) echo "oem_journal_size=$(BOARD_OEMIMAGE_JOURNAL_SIZE)" >> $(1))
+    $(if $(BOARD_OEMIMAGE_SQUASHFS_COMPRESSOR),$(hide) echo "oem_squashfs_compressor=$(BOARD_OEMIMAGE_SQUASHFS_COMPRESSOR)" >> $(1))
+    $(if $(BOARD_OEMIMAGE_SQUASHFS_COMPRESSOR_OPT),$(hide) echo "oem_squashfs_compressor_opt=$(BOARD_OEMIMAGE_SQUASHFS_COMPRESSOR_OPT)" >> $(1))
+    $(if $(BOARD_OEMIMAGE_SQUASHFS_BLOCK_SIZE),$(hide) echo "oem_squashfs_block_size=$(BOARD_OEMIMAGE_SQUASHFS_BLOCK_SIZE)" >> $(1))
+    $(if $(BOARD_OEMIMAGE_SQUASHFS_DISABLE_4K_ALIGN),$(hide) echo "oem_squashfs_disable_4k_align=$(BOARD_OEMIMAGE_SQUASHFS_DISABLE_4K_ALIGN)" >> $(1))
+    $(if $(PRODUCT_OEM_BASE_FS_PATH),$(hide) echo "oem_base_fs_file=$(PRODUCT_OEM_BASE_FS_PATH)" >> $(1))
+    $(if $(BOARD_OEMIMAGE_PARTITION_RESERVED_SIZE),$(hide) echo "oem_reserved_size=$(BOARD_OEMIMAGE_PARTITION_RESERVED_SIZE)" >> $(1))
+    $(hide) echo "oEm_selinux_fc=$(SELINUX_FC)" >> $(1)
 )
 $(hide) echo "ext_mkuserimg=$(notdir $(MKEXTUSERIMG))" >> $(1)
 
@@ -1886,6 +1958,9 @@ ifdef BUILDING_SYSTEM_EXT_IMAGE
 endif
 ifdef BUILDING_ODM_IMAGE
   PROP_DICTIONARY_IMAGES += odm
+endif
+ifdef BUILDING_OEM_IMAGE
+  PROP_DICTIONARY_IMAGES += oem
 endif
 define generate-userimage-prop-dictionary
   $(call generate-image-prop-dictionary,$(1),$(PROP_DICTIONARY_IMAGES),$(2))
@@ -2155,6 +2230,7 @@ $(INSTALLED_RECOVERY_BUILD_PROP_TARGET): \
 	    $(intermediate_system_build_prop) \
 	    $(INSTALLED_VENDOR_BUILD_PROP_TARGET) \
 	    $(INSTALLED_ODM_BUILD_PROP_TARGET) \
+	    $(INSTALLED_OEM_BUILD_PROP_TARGET) \
 	    $(INSTALLED_PRODUCT_BUILD_PROP_TARGET) \
 	    $(INSTALLED_SYSTEM_EXT_BUILD_PROP_TARGET)
 	@echo "Target recovery buildinfo: $@"
@@ -2165,6 +2241,7 @@ $(INSTALLED_RECOVERY_BUILD_PROP_TARGET): \
 	$(hide) cat $(intermediate_system_build_prop) >> $@
 	$(hide) cat $(INSTALLED_VENDOR_BUILD_PROP_TARGET) >> $@
 	$(hide) cat $(INSTALLED_ODM_BUILD_PROP_TARGET) >> $@
+	$(hide) cat $(INSTALLED_OEM_BUILD_PROP_TARGET) >> $@
 	$(hide) cat $(INSTALLED_PRODUCT_BUILD_PROP_TARGET) >> $@
 	$(hide) cat $(INSTALLED_SYSTEM_EXT_BUILD_PROP_TARGET) >> $@
 	$(call append-recovery-ui-properties,$(PRIVATE_RECOVERY_UI_PROPERTIES),$@)
@@ -2904,6 +2981,9 @@ endif
 ifdef BUILDING_ODM_IMAGE
 	echo "-D $(TARGET_OUT_ODM)" >> $@.lst
 endif
+ifdef BUILDING_OEM_IMAGE
+	echo "-D $(TARGET_OUT_OEM)" >> $@.lst
+endif
 ifneq ($(PDK_PLATFORM_JAVA_ZIP_CONTENTS),)
 	echo "-C $(OUT_DIR)" >> $@.lst
 	for f in $(filter-out $(PRIVATE_DEX_FILES),$(addprefix -f $(OUT_DIR)/,$(PDK_PLATFORM_JAVA_ZIP_CONTENTS))); do \
@@ -3165,6 +3245,21 @@ define create-vendor-odm-symlink
 endef
 endif
 
+# Create symlink /vendor/oem to /oem if necessary.
+ifdef BOARD_USES_OEMIMAGE
+define create-vendor-oem-symlink
+$(hide) if [ -d $(TARGET_OUT_VENDOR)/oem ] && [ ! -h $(TARGET_OUT_VENDOR)/oem ]; then \
+  echo 'Non-symlink $(TARGET_OUT_VENDOR)/oem detected!' 1>&2; \
+  echo 'You cannot install files to $(TARGET_OUT_VENDOR)/oem while building a separate oem.img!' 1>&2; \
+  exit 1; \
+fi
+$(hide) ln -sf /oem $(TARGET_OUT_VENDOR)/oem
+endef
+else
+define create-vendor-oem-symlink
+endef
+endif
+
 vendorimage_intermediates := \
     $(call intermediates-dir-for,PACKAGING,vendor)
 BUILT_VENDORIMAGE_TARGET := $(PRODUCT_OUT)/vendor.img
@@ -3172,6 +3267,7 @@ define build-vendorimage-target
   $(call pretty,"Target vendor fs image: $(INSTALLED_VENDORIMAGE_TARGET)")
   @mkdir -p $(TARGET_OUT_VENDOR)
   $(call create-vendor-odm-symlink)
+  $(call create-vendor-oem-symlink)
   @mkdir -p $(vendorimage_intermediates) && rm -rf $(vendorimage_intermediates)/vendor_image_info.txt
   $(call generate-image-prop-dictionary, $(vendorimage_intermediates)/vendor_image_info.txt,vendor,skip_fsck=true)
   PATH=$(INTERNAL_USERIMAGES_BINARY_PATHS):$$PATH \
@@ -3371,6 +3467,61 @@ $(eval $(call copy-one-file,$(BOARD_PREBUILT_ODMIMAGE),$(INSTALLED_ODMIMAGE_TARG
 endif
 
 # -----------------------------------------------------------------
+# oem partition image
+ifdef BUILDING_OEM_IMAGE
+INTERNAL_OEMIMAGE_FILES := \
+    $(filter $(TARGET_OUT_OEM)/%,\
+      $(ALL_DEFAULT_INSTALLED_MODULES)\
+      $(ALL_PDK_FUSION_FILES)) \
+    $(PDK_FUSION_SYMLINK_STAMP)
+# platform.zip depends on $(INTERNAL_OEMIMAGE_FILES).
+$(INSTALLED_PLATFORM_ZIP) : $(INTERNAL_OEMIMAGE_FILES)
+
+INSTALLED_FILES_FILE_OEM := $(PRODUCT_OUT)/installed-files-oem.txt
+INSTALLED_FILES_JSON_OEM := $(INSTALLED_FILES_FILE_OEM:.txt=.json)
+$(INSTALLED_FILES_FILE_OEM): .KATI_IMPLICIT_OUTPUTS := $(INSTALLED_FILES_JSON_OEM)
+$(INSTALLED_FILES_FILE_OEM) : $(INTERNAL_OEMIMAGE_FILES) $(FILESLIST) $(FILESLIST_UTIL)
+	@echo Installed file list: $@
+	@mkdir -p $(dir $@)
+	@rm -f $@
+	$(hide) $(FILESLIST) $(TARGET_OUT_OEM) > $(@:.txt=.json)
+	$(hide) $(FILESLIST_UTIL) -c $(@:.txt=.json) > $@
+
+oemimage_intermediates := \
+    $(call intermediates-dir-for,PACKAGING,oem)
+BUILT_OeMIMAGE_TARGET := $(PRODUCT_OUT)/oem.img
+define build-oemimage-target
+  $(call pretty,"Target oem fs image: $(INSTALLED_OEMIMAGE_TARGET)")
+  @mkdir -p $(TARGET_OUT_OEM)
+  @mkdir -p $(oemimage_intermediates) && rm -rf $(oemimage_intermediates)/oem_image_info.txt
+  $(call generate-userimage-prop-dictionary, $(oemimage_intermediates)/oem_image_info.txt, skip_fsck=true)
+  PATH=$(INTERNAL_USERIMAGES_BINARY_PATHS):$$PATH \
+      $(BUILD_IMAGE) \
+          $(TARGET_OUT_OEM) $(oemimage_intermediates)/oem_image_info.txt \
+          $(INSTALLED_OEMIMAGE_TARGET) $(TARGET_OUT)
+  $(call assert-max-image-size,$(INSTALLED_OEMIMAGE_TARGET),$(BOARD_OEMIMAGE_PARTITION_SIZE))
+endef
+
+# We just build this directly to the install location.
+INSTALLED_OEMIMAGE_TARGET := $(BUILT_OEMIMAGE_TARGET)
+$(INSTALLED_OEMIMAGE_TARGET): \
+    $(INTERNAL_USERIMAGES_DEPS) \
+    $(INTERNAL_OEMIMAGE_FILES) \
+    $(INSTALLED_FILES_FILE_OEM)
+	$(build-oemimage-target)
+
+.PHONY: oemimage-nodeps onod
+oemimage-nodeps onod: | $(INTERNAL_USERIMAGES_DEPS)
+	$(build-oemimage-target)
+
+sync: $(INTERNAL_OEMIMAGE_FILES)
+
+else ifdef BOARD_PREBUILT_OEMIMAGE
+INSTALLED_OEMIMAGE_TARGET := $(PRODUCT_OUT)/oem.img
+$(eval $(call copy-one-file,$(BOARD_PREBUILT_OEMIMAGE),$(INSTALLED_OEMIMAGE_TARGET)))
+endif
+
+# -----------------------------------------------------------------
 # dtbo image
 ifdef BOARD_PREBUILT_DTBOIMAGE
 INSTALLED_DTBOIMAGE_TARGET := $(PRODUCT_OUT)/dtbo.img
@@ -3526,6 +3677,10 @@ BOARD_AVB_ODM_ADD_HASHTREE_FOOTER_ARGS += \
     --prop com.android.build.odm.fingerprint:$(BUILD_FINGERPRINT_FROM_FILE) \
     --prop com.android.build.odm.os_version:$(PLATFORM_VERSION_LAST_STABLE)
 
+BOARD_AVB_OEM_ADD_HASHTREE_FOOTER_ARGS += \
+    --prop com.android.build.oem.fingerprint:$(BUILD_FINGERPRINT_FROM_FILE) \
+    --prop com.android.build.oem.os_version:$(PLATFORM_VERSION_LAST_STABLE)
+
 BOARD_AVB_DTBO_ADD_HASH_FOOTER_ARGS += \
     --prop com.android.build.dtbo.fingerprint:$(BUILD_FINGERPRINT_FROM_FILE)
 
@@ -3554,6 +3709,7 @@ RECOVERY_FOOTER_ARGS := BOARD_AVB_RECOVERY_ADD_HASH_FOOTER_ARGS
 PRODUCT_FOOTER_ARGS := BOARD_AVB_PRODUCT_ADD_HASHTREE_FOOTER_ARGS
 SYSTEM_EXT_FOOTER_ARGS := BOARD_AVB_SYSTEM_EXT_ADD_HASHTREE_FOOTER_ARGS
 ODM_FOOTER_ARGS := BOARD_AVB_ODM_ADD_HASHTREE_FOOTER_ARGS
+OEM_FOOTER_ARGS := BOARD_AVB_VENDOR_ADD_HASHTREE_FOOTER_ARGS
 
 # Helper function that checks and sets required build variables for an AVB chained partition.
 # $(1): the partition to enable AVB chain, e.g., boot or system or vbmeta_system.
@@ -3648,6 +3804,10 @@ ifdef INSTALLED_ODMIMAGE_TARGET
 $(eval $(call check-and-set-avb-args,odm))
 endif
 
+ifdef INSTALLED_OEMIMAGE_TARGET
+$(eval $(call check-and-set-avb-args,oem))
+endif
+
 ifdef INSTALLED_DTBOIMAGE_TARGET
 $(eval $(call check-and-set-avb-args,dtbo))
 endif
@@ -3728,6 +3888,9 @@ define extract-avb-chain-public-keys
   $(if $(BOARD_AVB_ODM_KEY_PATH),\
     $(hide) $(AVBTOOL) extract_public_key --key $(BOARD_AVB_ODM_KEY_PATH) \
       --output $(1)/odm.avbpubkey)
+  $(if $(BOARD_AVB_VBMETA_OEM_KEY_PATH),\
+    $(hide) $(AVBTOOL) extract_public_key --key $(BOARD_AVB_VBMETA_OEM_KEY_PATH) \
+        --output $(1)/vbmeta_oem.avbpubkey)
   $(if $(BOARD_AVB_DTBO_KEY_PATH),\
     $(hide) $(AVBTOOL) extract_public_key --key $(BOARD_AVB_DTBO_KEY_PATH) \
       --output $(1)/dtbo.avbpubkey)
@@ -3810,6 +3973,7 @@ $(INSTALLED_VBMETAIMAGE_TARGET): \
 	    $(INSTALLED_PRODUCTIMAGE_TARGET) \
 	    $(INSTALLED_SYSTEM_EXTIMAGE_TARGET) \
 	    $(INSTALLED_ODMIMAGE_TARGET) \
+	    $(INSTALLED_OEMIMAGE_TARGET) \
 	    $(INSTALLED_DTBOIMAGE_TARGET) \
 	    $(INSTALLED_CUSTOMIMAGES_TARGET) \
 	    $(INSTALLED_RECOVERYIMAGE_TARGET) \
@@ -3842,6 +4006,7 @@ check_vintf_common_srcs_patterns := \
   $(TARGET_OUT)/etc/vintf/% \
   $(TARGET_OUT_VENDOR)/etc/vintf/% \
   $(TARGET_OUT_ODM)/etc/vintf/% \
+  $(TARGET_OUT_OEM)/etc/vintf/% \
   $(TARGET_OUT_PRODUCT)/etc/vintf/% \
   $(TARGET_OUT_SYSTEM_EXT)/etc/vintf/% \
 
@@ -3849,6 +4014,7 @@ check_vintf_common_srcs := $(sort $(filter $(check_vintf_common_srcs_patterns), 
   $(INTERNAL_SYSTEMIMAGE_FILES) \
   $(INTERNAL_VENDORIMAGE_FILES) \
   $(INTERNAL_ODMIMAGE_FILES) \
+  $(INTERNAL_OEMIMAGE_FILES) \
   $(INTERNAL_PRODUCTIMAGE_FILES) \
   $(INTERNAL_SYSTEM_EXTIMAGE_FILES) \
 ))
@@ -3902,11 +4068,12 @@ check_vintf_vendor_deps :=
 # Skip partial builds; only check full builds. Only check if:
 # - PRODUCT_ENFORCE_VINTF_MANIFEST is true
 # - system / vendor VINTF metadata exists
-# - Building product / system_ext / odm images if board has product / system_ext / odm images
+# - Building product / system_ext / odm / oem images if board has product / system_ext / odm / oem images
 ifeq ($(PRODUCT_ENFORCE_VINTF_MANIFEST),true)
 ifeq ($(check_vintf_has_system),true)
 ifeq ($(check_vintf_has_vendor),true)
 ifeq ($(filter true,$(BUILDING_ODM_IMAGE)),$(filter true,$(BOARD_USES_ODMIMAGE)))
+ifeq ($(filter true,$(BUILDING_OEM_IMAGE)),$(filter true,$(BOARD_USES_OEMIMAGE)))
 ifeq ($(filter true,$(BUILDING_PRODUCT_IMAGE)),$(filter true,$(BOARD_USES_PRODUCTIMAGE)))
 ifeq ($(filter true,$(BUILDING_SYSTEM_EXT_IMAGE)),$(filter true,$(BOARD_USES_SYSTEM_EXTIMAGE)))
 
@@ -3978,6 +4145,7 @@ check_vintf_compatible_args += \
   --dirmap /system:$(TARGET_OUT) \
   --dirmap /vendor:$(TARGET_OUT_VENDOR) \
   --dirmap /odm:$(TARGET_OUT_ODM) \
+  --dirmap /oem:$(TARGET_OUT_OEM) \
   --dirmap /product:$(TARGET_OUT_PRODUCT) \
   --dirmap /system_ext:$(TARGET_OUT_SYSTEM_EXT) \
 
@@ -4020,6 +4188,7 @@ check_vintf_compatible_deps :=
 endif # BUILDING_SYSTEM_EXT_IMAGE equals BOARD_USES_SYSTEM_EXTIMAGE
 endif # BUILDING_PRODUCT_IMAGE equals BOARD_USES_PRODUCTIMAGE
 endif # BUILDING_ODM_IMAGE equals BOARD_USES_ODMIMAGE
+endif # BUILDING_OEM_IMAGE equals BOARD_USES_OEMIMAGE
 endif # check_vintf_has_vendor
 endif # check_vintf_has_system
 endif # PRODUCT_ENFORCE_VINTF_MANIFEST
@@ -4622,6 +4791,7 @@ $(BUILT_TARGET_FILES_PACKAGE): \
 	    $(INSTALLED_SYSTEM_EXTIMAGE_TARGET) \
 	    $(INSTALLED_VBMETAIMAGE_TARGET) \
 	    $(INSTALLED_ODMIMAGE_TARGET) \
+	    $(INSTALLED_OEMIMAGE_TARGET) \
 	    $(INSTALLED_DTBOIMAGE_TARGET) \
 	    $(INSTALLED_CUSTOMIMAGES_TARGET) \
 	    $(INTERNAL_SYSTEMOTHERIMAGE_FILES) \
@@ -4638,6 +4808,7 @@ $(BUILT_TARGET_FILES_PACKAGE): \
 	    $(PRODUCT_PRODUCT_BASE_FS_PATH) \
 	    $(PRODUCT_SYSTEM_EXT_BASE_FS_PATH) \
 	    $(PRODUCT_ODM_BASE_FS_PATH) \
+	    $(PRODUCT_OEM_BASE_FS_PATH) \
 	    $(LPMAKE) \
 	    $(SELINUX_FC) \
 	    $(INSTALLED_MISC_INFO_TARGET) \
@@ -4655,6 +4826,7 @@ $(BUILT_TARGET_FILES_PACKAGE): \
 	$(call create-system-product-symlink)
 	$(call create-system-system_ext-symlink)
 	$(call create-vendor-odm-symlink)
+	$(call create-vendor-oem-symlink)
 	$(hide) rm -rf $@ $@.list $(zip_root)
 	$(hide) mkdir -p $(dir $@) $(zip_root)
 ifneq (,$(INSTALLED_RECOVERYIMAGE_TARGET)$(filter true,$(BOARD_USES_RECOVERY_AS_BOOT)))
@@ -4791,6 +4963,11 @@ ifdef BUILDING_ODM_IMAGE
 	$(hide) $(call package_files-copy-root, \
 	    $(TARGET_OUT_ODM),$(zip_root)/ODM)
 endif
+ifdef BUILDING_OEM_IMAGE
+	@# Contents of the oem image
+	$(hide) $(call package_files-copy-root, \
+	    $(TARGET_OUT_OEM),$(zip_root)/OEM)
+endif
 ifdef BUILDING_SYSTEM_OTHER_IMAGE
 	@# Contents of the system_other image
 	$(hide) $(call package_files-copy-root, \
@@ -4835,6 +5012,10 @@ endif
 ifneq ($(PRODUCT_ODM_BASE_FS_PATH),)
 	$(hide) cp $(PRODUCT_ODM_BASE_FS_PATH) \
 	  $(zip_root)/META/$(notdir $(PRODUCT_ODM_BASE_FS_PATH))
+endif
+ifneq ($(PRODUCT_OEM_BASE_FS_PATH),)
+	$(hide) cp $(PRODUCT_OEM_BASE_FS_PATH) \
+	  $(zip_root)/META/$(notdir $(PRODUCT_OEM_BASE_FS_PATH))
 endif
 ifeq ($(TARGET_OTA_ALLOW_NON_AB),true)
 ifneq ($(INSTALLED_RECOVERYIMAGE_TARGET),)
@@ -4881,6 +5062,10 @@ ifdef BOARD_PREBUILT_ODMIMAGE
 	$(hide) mkdir -p $(zip_root)/IMAGES
 	$(hide) cp $(INSTALLED_ODMIMAGE_TARGET) $(zip_root)/IMAGES/
 endif
+ifdef BOARD_PREBUILT_OEMIMAGE
+	$(hide) mkdir -p $(zip_root)/IMAGES
+	$(hide) cp $(INSTALLED_OEMIMAGE_TARGET) $(zip_root)/IMAGES/
+endif
 ifdef BOARD_PREBUILT_DTBOIMAGE
 	$(hide) mkdir -p $(zip_root)/PREBUILT_IMAGES
 	$(hide) cp $(INSTALLED_DTBOIMAGE_TARGET) $(zip_root)/PREBUILT_IMAGES/
@@ -4911,6 +5096,9 @@ ifdef BUILDING_SYSTEM_EXT_IMAGE
 endif
 ifdef BUILDING_ODM_IMAGE
 	$(hide) $(call fs_config,$(zip_root)/ODM,odm/) > $(zip_root)/META/odm_filesystem_config.txt
+endif
+ifdef BUILDING_OEM_IMAGE
+	$(hide) $(call fs_config,$(zip_root)/OEM,oem/) > $(zip_root)/META/oem_filesystem_config.txt
 endif
 	@# ROOT always contains the files for the root under normal boot.
 	$(hide) $(call fs_config,$(zip_root)/ROOT,) > $(zip_root)/META/root_filesystem_config.txt
@@ -5081,6 +5269,7 @@ $(SYMBOLS_ZIP): $(INSTALLED_SYSTEMIMAGE_TARGET) \
 	    $(INSTALLED_PRODUCTIMAGE_TARGET) \
 	    $(INSTALLED_SYSTEM_EXTIMAGE_TARGET) \
 	    $(INSTALLED_ODMIMAGE_TARGET) \
+	    $(INSTALLED_OEMIMAGE_TARGET) \
 	    $(updater_dep)
 endif
 $(SYMBOLS_ZIP): PRIVATE_LIST_FILE := $(call intermediates-dir-for,PACKAGING,symbols)/filelist
@@ -5106,7 +5295,8 @@ $(COVERAGE_ZIP): $(INSTALLED_SYSTEMIMAGE_TARGET) \
 	    $(INSTALLED_VENDORIMAGE_TARGET) \
 	    $(INSTALLED_PRODUCTIMAGE_TARGET) \
 	    $(INSTALLED_SYSTEM_EXTIMAGE_TARGET) \
-	    $(INSTALLED_ODMIMAGE_TARGET)
+	    $(INSTALLED_ODMIMAGE_TARGET) \
+	    $(INSTALLED_OEMIMAGE_TARGET)
 endif
 $(COVERAGE_ZIP): PRIVATE_LIST_FILE := $(call intermediates-dir-for,PACKAGING,coverage)/filelist
 $(COVERAGE_ZIP): $(SOONG_ZIP)
@@ -5183,6 +5373,7 @@ $(PROGUARD_DICT_ZIP): \
     $(INSTALLED_PRODUCTIMAGE_TARGET) \
     $(INSTALLED_SYSTEM_EXTIMAGE_TARGET) \
     $(INSTALLED_ODMIMAGE_TARGET) \
+    $(INSTALLED_OEMIMAGE_TARGET) \
     $(updater_dep)
 endif
 $(PROGUARD_DICT_ZIP): PRIVATE_LIST_FILE := $(call intermediates-dir-for,PACKAGING,proguard)/filelist
@@ -5419,6 +5610,16 @@ $(INSTALLED_QEMU_ODMIMAGE): $(INSTALLED_ODMIMAGE_TARGET) $(MK_QEMU_IMAGE_SH) $(S
 
 odmimage: $(INSTALLED_QEMU_ODMIMAGE)
 droidcore: $(INSTALLED_QEMU_ODMIMAGE)
+endif
+
+ifdef INSTALLED_OEMIMAGE_TARGET
+INSTALLED_QEMU_OEMIMAGE := $(PRODUCT_OUT)/oem-qemu.img
+$(INSTALLED_QEMU_OEMIMAGE): $(INSTALLED_OEMIMAGE_TARGET) $(MK_QEMU_IMAGE_SH) $(SGDISK_HOST)
+	@echo Create oem-qemu.img
+	(export SGDISK=$(SGDISK_HOST); $(MK_QEMU_IMAGE_SH) $(INSTALLED_OEMIMAGE_TARGET))
+
+oemimage: $(INSTALLED_QEMU_OEMIMAGE)
+droidcore: $(INSTALLED_QEMU_OEMIMAGE)
 endif
 
 QEMU_VERIFIED_BOOT_PARAMS := $(PRODUCT_OUT)/VerifiedBootParams.textproto

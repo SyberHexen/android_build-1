@@ -72,12 +72,15 @@ _board_strip_readonly_list += \
   BOARD_SYSTEM_EXTIMAGE_FILE_SYSTEM_TYPE \
   BOARD_ODMIMAGE_PARTITION_SIZE \
   BOARD_ODMIMAGE_FILE_SYSTEM_TYPE \
+  BOARD_OEMIMAGE_PARTITION_SIZE \
+  BOARD_OEMIMAGE_FILE_SYSTEM_TYPE \
 
 # Logical partitions related variables.
 _dynamic_partitions_var_list += \
   BOARD_SYSTEMIMAGE_PARTITION_RESERVED_SIZE \
   BOARD_VENDORIMAGE_PARTITION_RESERVED_SIZE \
   BOARD_ODMIMAGE_PARTITION_RESERVED_SIZE \
+  BOARD_OEMIMAGE_PARTITION_RESERVED_SIZE \
   BOARD_PRODUCTIMAGE_PARTITION_RESERVED_SIZE \
   BOARD_SYSTEM_EXTIMAGE_PARTITION_RESERVED_SIZE \
   BOARD_SUPER_PARTITION_SIZE \
@@ -547,6 +550,40 @@ ifdef BOARD_PREBUILT_ODMIMAGE
   BUILDING_ODM_IMAGE :=
 endif
 .KATI_READONLY := BUILDING_ODM_IMAGE
+
+###########################################
+# Now we can substitute with the real value of TARGET_COPY_OUT_OEM
+ifeq ($(TARGET_COPY_OUT_OEM),$(_oem_path_placeholder))
+  TARGET_COPY_OUT_OEM := $(TARGET_COPY_OUT_VENDOR)/oem
+else ifeq ($(filter oem system/vendor/oem vendor/odm,$(TARGET_COPY_OUT_OEM)),)
+  $(error TARGET_COPY_OUT_OEM must be either 'odm', 'system/vendor/oem' or 'vendor/oem', seeing '$(TARGET_COPY_OUT_OEM)'.)
+endif
+PRODUCT_COPY_FILES := $(subst $(_oem_path_placeholder),$(TARGET_COPY_OUT_OEM),$(PRODUCT_COPY_FILES))
+
+BOARD_USES_OEMIMAGE :=
+ifdef BOARD_PREBUILT_OEMIMAGE
+  BOARD_USES_OEMIMAGE := true
+endif
+ifdef BOARD_OEMIMAGE_FILE_SYSTEM_TYPE
+  BOARD_USES_OEMIMAGE := true
+endif
+$(call check_image_config,oem)
+
+BUILDING_OEM_IMAGE :=
+ifeq ($(PRODUCT_BUILD_OEM_IMAGE),)
+  ifdef BOARD_OEMIMAGE_FILE_SYSTEM_TYPE
+    BUILDING_OEM_IMAGE := true
+  endif
+else ifeq ($(PRODUCT_BUILD_OEM_IMAGE),true)
+  BUILDING_OEM_IMAGE := true
+  ifndef BOARD_OEMIMAGE_FILE_SYSTEM_TYPE
+    $(error PRODUCT_BUILD_OEM_IMAGE set to true, but BOARD_OEMIMAGE_FILE_SYSTEM_TYPE not defined)
+  endif
+endif
+ifdef BOARD_PREBUILT_OEMIMAGE
+  BUILDING_OEM_IMAGE :=
+endif
+.KATI_READONLY := BUILDING_OEM_IMAGE
 
 ###########################################
 # Ensure consistency among TARGET_RECOVERY_UPDATER_LIBS, AB_OTA_UPDATER, and PRODUCT_OTA_FORCE_NON_AB_PACKAGE.

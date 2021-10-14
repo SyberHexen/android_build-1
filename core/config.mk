@@ -924,6 +924,13 @@ $(error Should not define BOARD_ODMIMAGE_PARTITION_SIZE and \
 endif
 endif
 
+ifneq ($(BOARD_OEMIMAGE_PARTITION_SIZE),)
+ifneq ($(BOARD_OEMIMAGE_PARTITION_RESERVED_SIZE),)
+$(error Should not define BOARD_OEMIMAGE_PARTITION_SIZE and \
+    BOARD_OEMIMAGE_PARTITION_RESERVED_SIZE together)
+endif
+endif
+
 ifneq ($(BOARD_PRODUCTIMAGE_PARTITION_SIZE),)
 ifneq ($(BOARD_PRODUCTIMAGE_PARTITION_RESERVED_SIZE),)
 $(error Should not define BOARD_PRODUCTIMAGE_PARTITION_SIZE and \
@@ -959,7 +966,7 @@ $(foreach group,$(call to-upper,$(BOARD_SUPER_PARTITION_GROUPS)), \
 )
 
 # BOARD_*_PARTITION_LIST: a list of the following tokens
-valid_super_partition_list := system vendor product system_ext odm
+valid_super_partition_list := system vendor product system_ext odm oem
 $(foreach group,$(call to-upper,$(BOARD_SUPER_PARTITION_GROUPS)), \
     $(if $(filter-out $(valid_super_partition_list),$(BOARD_$(group)_PARTITION_LIST)), \
         $(error BOARD_$(group)_PARTITION_LIST contains invalid partition name \
@@ -1222,6 +1229,7 @@ dont_bother_goals := out \
     pnod productimage-nodeps \
     senod systemextimage-nodeps \
     onod odmimage-nodeps \
+    onod oemimage-nodeps \
     systemotherimage-nodeps \
     ramdisk-nodeps \
     ramdisk_debug-nodeps \
